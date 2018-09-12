@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <ctype.h>
+#include <stdbool.h>
 #include "shell.h"
 
 /* Shared global variables */
@@ -99,6 +100,8 @@ struct commands *parse_commands_with_pipes(char *input) {
 
 
 int run_cmd(const char *s);
+
+static inline int run_command(const char *sbuf, bool verbose);
 
 /* Returns whether a command is a built-in. As of now
  * one of [exit, cd]
@@ -274,6 +277,8 @@ void cleanup_commands(struct commands *cmds) {
 int main(void) {
     const char *in = "  /usr/local/opt/coreutils/libexec/gnubin/ls | /usr/local/opt/coreutils/libexec/gnubin/wc -l   ;    /usr/local/bin/tree ;";
 
+    static const bool verbose = true;
+
     const size_t slen = strlen(in);
     char sbuf[slen];
 
@@ -281,7 +286,7 @@ int main(void) {
         switch (in[i]) {
             case ';':
                 for (size_t j = cur; j != 0; j--) {
-                    switch(sbuf[j]) {
+                    switch (sbuf[j]) {
                         case '\n':
                         case '\t':
                         case '\b':
@@ -293,14 +298,15 @@ int main(void) {
                         space:
                             break;
                         default:
-                            if (isspace((unsigned char)sbuf[i]))
+                            if (isspace((unsigned char) sbuf[i]))
                                 goto space;
 
-                            sbuf[cur-1] = '\0';
+                            sbuf[cur - 1] = '\0';
                             goto end;
                     }
                 }
             end:
+                run_command(sbuf, verbose);
                 cur = 0;
                 memset(sbuf, 0, slen);
                 break;
@@ -315,12 +321,19 @@ int main(void) {
         }
     }
 
-    if (strlen(sbuf)) {
-        printf("cmd: \"%s\"\n", sbuf);
-        printf("$?: %d\n", run_cmd(sbuf));
-    }
+    return run_command(sbuf, verbose);
+}
 
-    return EXIT_SUCCESS;
+static inline int run_command(const char *sbuf, const bool verbose) {
+    if(!strlen(sbuf)) return 0;
+    else if (verbose) {
+        printf("cmd: \"%s\"\n", sbuf);
+        const int retcode = run_cmd(sbuf);
+
+        printf("$?: %d\n", retcode);
+        return retcode;
+    }
+    return run_cmd(sbuf);
 }
 
 int run_cmd(const char *s) {
