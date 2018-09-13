@@ -18,103 +18,15 @@ int main(void) {
     static const bool verbose = true;
 
     return processInput(in, verbose);
-
 }
 
-/* Process all input commands */
-int processInput(const char *in, const bool verbose) {
-    const size_t slen = strlen(in);
-    char sbuf[slen];
-    static int last_retcode = 0;
+/* Frees up memory for the commands */
+void cleanup_commands(struct commands *cmds) {
+    for (int i = 0; i < cmds->cmd_count; i++)
+        free(cmds->cmds[i]);
 
-    for (size_t i = 0, cur = 0; i < slen; i++) {
-        switch (in[i]) {
-            case ';':
-                for (size_t j = cur; j != 0; j--) {
-                    switch (sbuf[j]) {
-                        case '\n':
-                        case '\t':
-                        case '\b':
-                        case '\r':
-                        case ' ':
-                        case '\0':
-                        case 1:
-                        case '':
-                        space:
-                            break;
-                        default:
-                            if (isspace((unsigned char) sbuf[i]))
-                                goto space;
-
-                            sbuf[cur - 1] = '\0';
-                            goto end;
-                    }
-                }
-            end:
-                last_retcode = run_command(sbuf, verbose);
-                cur = 0;
-                memset(sbuf, 0, slen);
-                break;
-            case '\n':
-            case '\t':
-            case '\b':
-            case '\r':
-            case ' ':
-                if (cur == 0) break;
-            default:
-                sbuf[cur++] = in[i];
-        }
-    }
-
-    return run_command(sbuf, verbose) || last_retcode;
+    free(cmds);
 }
-
-static inline int run_command(const char *sbuf, const bool verbose) {
-    if (!strlen(sbuf)) return 0;
-    else if (verbose) {
-        printf("cmd: \"%s\"\n", sbuf);
-        const int retcode = run_cmd(sbuf);
-
-        printf("$?: %d\n", retcode);
-        return retcode;
-    }
-    return run_cmd(sbuf);
-}
-
-int run_cmd(const char *s) {
-    int exec_ret = 0;
-    char *input = strdup(s);
-
-    if (input == NULL) {
-        return EXIT_SUCCESS;
-    }
-
-    if (strlen(input) > 0 && !is_blank(input) && input[0] != '|') {
-        char *linecopy = strdup(input);
-
-        struct commands *commands = parse_commands_with_pipes(input);
-
-        free(linecopy);
-        exec_ret = exec_commands(commands);
-        cleanup_commands(commands);
-    }
-
-    free(input);
-
-    return exec_ret;
-}
-
-int is_blank(char *input) {
-    int n = (int) strlen(input);
-    int i;
-
-    for (i = 0; i < n; i++) {
-        if (!isspace(input[i]))
-            return 0;
-    }
-    return 1;
-}
-
 
 /* Parses a single command into a command struct.
  * Allocates memory for keeping the struct and the caller is responsible
@@ -144,7 +56,6 @@ struct command *parse_command(char *input) {
     cmd->argc = tokenCount;
     return cmd;
 }
-
 
 /* Parses a command with pipes into a commands* structure.
  * Allocates memory for keeping the struct and the caller is responsible
@@ -184,10 +95,25 @@ struct commands *parse_commands_with_pipes(char *input) {
     return cmds;
 }
 
+int is_blank(char *input) {
+    int n = (int) strlen(input);
+    int i;
 
-int run_cmd(const char *s);
+    for (i = 0; i < n; i++) {
+        if (!isspace(input[i]))
+            return 0;
+    }
+    return 1;
+}
 
-static inline int run_command(const char *sbuf, bool verbose);
+/* closes all the pipes */
+void close_pipes(int (*pipes)[2], int pipe_count) {
+    for (int i = 0; i < pipe_count; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+
+}
 
 /* Returns whether a command is a built-in. As of now
  * one of [exit, cd]
@@ -196,7 +122,6 @@ int check_built_in(struct command *cmd) {
     return strcmp(cmd->name, "exit") == 0 ||
            strcmp(cmd->name, "cd") == 0;
 }
-
 
 /* Handles the shell built-in commands. Takes the input/output file descriptors
  * to execute the built-in against. Since none of the built-ins read input from
@@ -221,7 +146,6 @@ int handle_built_in(struct commands *cmds, struct command *cmd) {
     }
     return 0;
 }
-
 
 /* Executes a command by forking of a child and calling exec.
  * Causes the calling progress to halt until the child is done executing.
@@ -278,15 +202,6 @@ int exec_command(struct commands *cmds, struct command *cmd, int (*pipes)[2]) {
     }
     /* parent continues here */
     return child_pid;
-}
-
-/* closes all the pipes */
-void close_pipes(int (*pipes)[2], int pipe_count) {
-    for (int i = 0; i < pipe_count; i++) {
-        close(pipes[i][0]);
-        close(pipes[i][1]);
-    }
-
 }
 
 /* Executes a set of commands that are piped together.
@@ -350,11 +265,86 @@ int exec_commands(struct commands *cmds) {
     return exec_ret;
 }
 
+int run_cmd(const char *s) {
+    int exec_ret = 0;
+    char *input = strdup(s);
 
-/* Frees up memory for the commands */
-void cleanup_commands(struct commands *cmds) {
-    for (int i = 0; i < cmds->cmd_count; i++)
-        free(cmds->cmds[i]);
+    if (input == NULL) {
+        return EXIT_SUCCESS;
+    }
 
-    free(cmds);
+    if (strlen(input) > 0 && !is_blank(input) && input[0] != '|') {
+        char *linecopy = strdup(input);
+
+        struct commands *commands = parse_commands_with_pipes(input);
+
+        free(linecopy);
+        exec_ret = exec_commands(commands);
+        cleanup_commands(commands);
+    }
+
+    free(input);
+
+    return exec_ret;
+}
+
+static inline int run_command(const char *sbuf, const bool verbose) {
+    if (!strlen(sbuf)) return 0;
+    else if (verbose) {
+        printf("cmd: \"%s\"\n", sbuf);
+        const int retcode = run_cmd(sbuf);
+
+        printf("$?: %d\n", retcode);
+        return retcode;
+    }
+    return run_cmd(sbuf);
+}
+
+
+/* Process all input commands */
+int processInput(const char *in, const bool verbose) {
+    const size_t slen = strlen(in);
+    char sbuf[slen];
+    static int last_retcode = 0;
+
+    for (size_t i = 0, cur = 0; i < slen; i++) {
+        switch (in[i]) {
+            case ';':
+                for (size_t j = cur; j != 0; j--) {
+                    switch (sbuf[j]) {
+                        case '\n':
+                        case '\t':
+                        case '\b':
+                        case '\r':
+                        case ' ':
+                        case '\0':
+                        case 1:
+                        case '':
+                        space:
+                            break;
+                        default:
+                            if (isspace((unsigned char) sbuf[i]))
+                                goto space;
+
+                            sbuf[cur - 1] = '\0';
+                            goto end;
+                    }
+                }
+            end:
+                last_retcode = run_command(sbuf, verbose);
+                cur = 0;
+                memset(sbuf, 0, slen);
+                break;
+            case '\n':
+            case '\t':
+            case '\b':
+            case '\r':
+            case ' ':
+                if (cur == 0) break;
+            default:
+                sbuf[cur++] = in[i];
+        }
+    }
+
+    return run_command(sbuf, verbose) || last_retcode;
 }
