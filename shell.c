@@ -3,20 +3,106 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include "shell.h"
-
-/* Shared global variables */
-static char *input;           /* input entered by the user */
 
 /* useful for keeping track of parent's prev call for cleanup */
 static struct command *parent_cmd;
 static struct commands *parent_cmds;
 static char *temp_line;
 
+int main(void) {
+    const char *in = "  /usr/local/opt/coreutils/libexec/gnubin/ls | /usr/local/opt/coreutils/libexec/gnubin/wc -l   ;    /usr/local/bin/tree ;";
+
+    static const bool verbose = true;
+
+    return processInput(in, verbose);
+
+}
+
+/* Process all input commands */
+int processInput(const char *in, const bool verbose) {
+    const size_t slen = strlen(in);
+    char sbuf[slen];
+    static int last_retcode = 0;
+
+    for (size_t i = 0, cur = 0; i < slen; i++) {
+        switch (in[i]) {
+            case ';':
+                for (size_t j = cur; j != 0; j--) {
+                    switch (sbuf[j]) {
+                        case '\n':
+                        case '\t':
+                        case '\b':
+                        case '\r':
+                        case ' ':
+                        case '\0':
+                        case 1:
+                        case '':
+                        space:
+                            break;
+                        default:
+                            if (isspace((unsigned char) sbuf[i]))
+                                goto space;
+
+                            sbuf[cur - 1] = '\0';
+                            goto end;
+                    }
+                }
+            end:
+                last_retcode = run_command(sbuf, verbose);
+                cur = 0;
+                memset(sbuf, 0, slen);
+                break;
+            case '\n':
+            case '\t':
+            case '\b':
+            case '\r':
+            case ' ':
+                if (cur == 0) break;
+            default:
+                sbuf[cur++] = in[i];
+        }
+    }
+
+    return run_command(sbuf, verbose) || last_retcode;
+}
+
+static inline int run_command(const char *sbuf, const bool verbose) {
+    if (!strlen(sbuf)) return 0;
+    else if (verbose) {
+        printf("cmd: \"%s\"\n", sbuf);
+        const int retcode = run_cmd(sbuf);
+
+        printf("$?: %d\n", retcode);
+        return retcode;
+    }
+    return run_cmd(sbuf);
+}
+
+int run_cmd(const char *s) {
+    int exec_ret = 0;
+    char *input = strdup(s);
+
+    if (input == NULL) {
+        return EXIT_SUCCESS;
+    }
+
+    if (strlen(input) > 0 && !is_blank(input) && input[0] != '|') {
+        char *linecopy = strdup(input);
+
+        struct commands *commands = parse_commands_with_pipes(input);
+
+        free(linecopy);
+        exec_ret = exec_commands(commands);
+        cleanup_commands(commands);
+    }
+
+    free(input);
+
+    return exec_ret;
+}
 
 int is_blank(char *input) {
     int n = (int) strlen(input);
@@ -178,7 +264,6 @@ int exec_command(struct commands *cmds, struct command *cmd, int (*pipes)[2]) {
 
         /* cleanup in the child to avoid memory leaks */
         free(pipes);
-        free(input);
         cleanup_commands(cmds);
 
         if (parent_cmd != NULL) {
@@ -272,89 +357,4 @@ void cleanup_commands(struct commands *cmds) {
         free(cmds->cmds[i]);
 
     free(cmds);
-}
-
-int main(void) {
-    const char *in = "  /usr/local/opt/coreutils/libexec/gnubin/ls | /usr/local/opt/coreutils/libexec/gnubin/wc -l   ;    /usr/local/bin/tree ;";
-
-    static const bool verbose = true;
-
-    const size_t slen = strlen(in);
-    char sbuf[slen];
-
-    for (size_t i = 0, cur = 0; i < slen; i++) {
-        switch (in[i]) {
-            case ';':
-                for (size_t j = cur; j != 0; j--) {
-                    switch (sbuf[j]) {
-                        case '\n':
-                        case '\t':
-                        case '\b':
-                        case '\r':
-                        case ' ':
-                        case '\0':
-                        case 1:
-                        case '':
-                        space:
-                            break;
-                        default:
-                            if (isspace((unsigned char) sbuf[i]))
-                                goto space;
-
-                            sbuf[cur - 1] = '\0';
-                            goto end;
-                    }
-                }
-            end:
-                run_command(sbuf, verbose);
-                cur = 0;
-                memset(sbuf, 0, slen);
-                break;
-            case '\n':
-            case '\t':
-            case '\b':
-            case '\r':
-            case ' ':
-                if (cur == 0) break;
-            default:
-                sbuf[cur++] = in[i];
-        }
-    }
-
-    return run_command(sbuf, verbose);
-}
-
-static inline int run_command(const char *sbuf, const bool verbose) {
-    if(!strlen(sbuf)) return 0;
-    else if (verbose) {
-        printf("cmd: \"%s\"\n", sbuf);
-        const int retcode = run_cmd(sbuf);
-
-        printf("$?: %d\n", retcode);
-        return retcode;
-    }
-    return run_cmd(sbuf);
-}
-
-int run_cmd(const char *s) {
-    int exec_ret = 0;
-    input = strdup(s);
-
-    if (input == NULL) {
-        return EXIT_SUCCESS;
-    }
-
-    if (strlen(input) > 0 && !is_blank(input) && input[0] != '|') {
-        char *linecopy = strdup(input);
-
-        struct commands *commands = parse_commands_with_pipes(input);
-
-        free(linecopy);
-        exec_ret = exec_commands(commands);
-        cleanup_commands(commands);
-    }
-
-    free(input);
-
-    return exec_ret;
 }
